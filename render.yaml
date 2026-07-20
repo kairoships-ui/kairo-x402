@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: kairo-x402
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: WALLET_ADDRESS
+        sync: false
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: X402_PRICE
+        value: "$0.01"
