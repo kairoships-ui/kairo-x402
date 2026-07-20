@@ -1,13 +1,15 @@
-// Kairo Agent x402 API — standalone, host-ready (Render/Fly/Railway).
+// Kairo Agent x402 API — standalone, host-ready (Render/Fly/Railway). x402 v2.
 // Config comes from ENV. Needs NO wallet private keys (it only RECEIVES to payTo).
 //   WALLET_ADDRESS         payTo address (required)
-//   CDP_API_KEY_ID/SECRET  Coinbase CDP facilitator creds -> mainnet Base settlement (optional; without => base-sepolia testnet)
-//   GITHUB_TOKEN           token with public read (for /api/bounty-scan; optional but recommended for rate limits)
+//   CDP_API_KEY_ID/SECRET  Coinbase CDP facilitator -> mainnet Base (eip155:8453). Without => base-sepolia testnet.
+//   GITHUB_TOKEN           public-read token (for /api/bounty-scan; recommended for rate limits)
 //   X402_PRICE             price per call, default "$0.02"
 //   PUBLIC_URL             public https origin (Render auto-sets RENDER_EXTERNAL_URL)
 //   PORT                   provided by host
 import express from 'express';
-import { paymentMiddleware } from 'x402-express';
+import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+import { ExactEvmScheme } from '@x402/evm/exact/server';
+import { HTTPFacilitatorClient } from '@x402/core/server';
 import { createPublicClient, http as viemHttp, formatEther, formatUnits, isAddress } from 'viem';
 import { base } from 'viem/chains';
 
@@ -17,27 +19,30 @@ const PORT = process.env.PORT || 4318;
 const PRICE = process.env.X402_PRICE || '$0.02';
 const PUBLIC_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
 
-let NETWORK, facilitator;
+// x402 v2 network (CAIP-2) + facilitator. CDP creds => mainnet Base; else base-sepolia public facilitator.
+let NET, facilitatorClient;
 if (process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET && process.env.X402_NETWORK !== 'base-sepolia') {
-  const { facilitator: cdpFacilitator } = await import('@coinbase/x402');
-  NETWORK = 'base'; facilitator = cdpFacilitator;
+  const { facilitator } = await import('@coinbase/x402'); // CDP FacilitatorConfig {url, createAuthHeaders}, reads CDP_API_KEY_* from env
+  NET = 'eip155:8453';
+  facilitatorClient = new HTTPFacilitatorClient(facilitator);
 } else {
-  NETWORK = 'base-sepolia';
-  facilitator = { url: process.env.X402_FACILITATOR || 'https://x402.org/facilitator' };
+  NET = 'eip155:84532';
+  facilitatorClient = new HTTPFacilitatorClient({ url: process.env.X402_FACILITATOR || 'https://x402.org/facilitator' });
 }
+const resourceServer = new x402ResourceServer(facilitatorClient).register(NET, new ExactEvmScheme());
 
-// Known agent-bounty honeypots (prompt-exfiltration). Kept inline so the service is self-contained.
 const HONEYPOT_BLOCKLIST = ['unsafelabs/bounty-hunters', 'clankernation/openagents'];
 const EXFIL_RE = /(environment_config|initialization payload|startup config(uration)?|system prompt|@generated-by|paste (the )?(full )?(raw )?(text of your )?(config|configuration|instructions|rules|prompt|payload)|behavioral (rules|guidelines)|home director|working director|complete instructions loaded)/i;
 
 const app = express();
 function publicBase(req) { return PUBLIC_URL || `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}`; }
+const acc = (desc) => ({ accepts: [{ scheme: 'exact', price: PRICE, network: NET, payTo: PAYTO }], description: desc, mimeType: 'application/json' });
 
-app.use(paymentMiddleware(PAYTO, {
-  'GET /api/strength': { price: PRICE, network: NETWORK, config: { discoverable: true, description: 'Password/entropy strength analysis.', mimeType: 'application/json', inputSchema: { queryParams: { pw: 'string' } }, outputSchema: { length: 'number', pool: 'number', entropy_bits: 'number', verdict: 'string' } } },
-  'GET /api/onchain': { price: PRICE, network: NETWORK, config: { discoverable: true, description: 'Base address intel: ETH+USDC balance, tx count, is-contract, is-funded, is-active.', mimeType: 'application/json', inputSchema: { queryParams: { address: '0x EVM address' } }, outputSchema: { network: 'string', address: 'string', eth_balance: 'number', usdc_balance: 'number', tx_count: 'number', is_contract: 'boolean', is_funded: 'boolean', is_active: 'boolean' } } },
-  'GET /api/bounty-scan': { price: PRICE, network: NETWORK, config: { discoverable: true, description: 'Agent-safety scanner for GitHub bounties: flags prompt-exfiltration honeypots, fiat/KYC-gated payout rails, unproven payers, blocklisted repos.', mimeType: 'application/json', inputSchema: { queryParams: { repo: 'owner/name', issue: 'number (optional)' } }, outputSchema: { repo: 'string', risk: 'string', crypto_collectable: 'boolean', safe_to_attempt: 'boolean', findings: 'array' } } },
-}, facilitator));
+app.use(paymentMiddleware({
+  'GET /api/strength': acc('Password/entropy strength analysis: entropy bits + verdict.'),
+  'GET /api/onchain': acc('Base address intel: ETH+USDC balance, tx count, is-contract, is-funded, is-active.'),
+  'GET /api/bounty-scan': acc('Agent-safety scanner for GitHub bounties: flags prompt-exfiltration honeypots, fiat/KYC-gated payout rails, unproven payers, blocklisted repos.'),
+}, resourceServer));
 
 const rpc = createPublicClient({ chain: base, transport: viemHttp('https://mainnet.base.org') });
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
@@ -49,7 +54,7 @@ app.get('/api/strength', (req, res) => {
   const pool = [26, 26, 10, 33].filter((n, i) => sets[i].test(pw)).reduce((a, b) => a + b, 0);
   const bits = pw.length ? +(pw.length * Math.log2(pool || 1)).toFixed(2) : 0;
   const verdict = bits < 28 ? 'very weak' : bits < 36 ? 'weak' : bits < 60 ? 'reasonable' : bits < 128 ? 'strong' : 'very strong';
-  console.log(JSON.stringify({ evt: 'paid', route: 'strength', amount: PRICE, network: NETWORK }));
+  console.log(JSON.stringify({ evt: 'paid', route: 'strength', amount: PRICE, network: NET }));
   res.json({ length: pw.length, pool, entropy_bits: bits, verdict });
 });
 
@@ -64,12 +69,11 @@ app.get('/api/onchain', async (req, res) => {
     const isContract = !!code && code !== '0x';
     const ethBal = Number(formatEther(wei)); const usdcBal = Number(formatUnits(usdc, 6));
     const funded = ethBal > 0 || usdcBal > 0;
-    console.log(JSON.stringify({ evt: 'paid', route: 'onchain', amount: PRICE, network: NETWORK }));
+    console.log(JSON.stringify({ evt: 'paid', route: 'onchain', amount: PRICE, network: NET }));
     res.json({ network: 'base', address: addr, eth_balance: ethBal, usdc_balance: usdcBal, tx_count: nonce, is_contract: isContract, is_funded: funded, is_active: nonce > 0 || isContract || funded });
   } catch (e) { res.status(502).json({ error: e.shortMessage || e.message }); }
 });
 
-const EXFIL = EXFIL_RE;
 async function gh(path) {
   const h = { Accept: 'application/vnd.github+json' };
   if (process.env.GITHUB_TOKEN) h.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
@@ -87,7 +91,7 @@ app.get('/api/bounty-scan', async (req, res) => {
     let text = '';
     if (issue) { const iss = await gh(`/repos/${repo}/issues/${issue}`); text += (iss.body || '') + '\n'; try { const cs = await gh(`/repos/${repo}/issues/${issue}/comments?per_page=100`); text += cs.map(c => c.body || '').join('\n'); } catch {} }
     else { try { const rd = await gh(`/repos/${repo}/readme`); text += Buffer.from(rd.content || '', 'base64').toString('utf8'); } catch {} }
-    if (EXFIL.test(text)) findings.push({ severity: 'critical', code: 'prompt_exfiltration', detail: 'Task requires pasting your system prompt / init payload / host info. Data-exfiltration attack.' });
+    if (EXFIL_RE.test(text)) findings.push({ severity: 'critical', code: 'prompt_exfiltration', detail: 'Task requires pasting your system prompt / init payload / host info. Data-exfiltration attack.' });
     if (/algora\.io|algora-pbc/i.test(text)) { collectable = false; findings.push({ severity: 'high', code: 'fiat_kyc_gated', detail: 'Algora = Stripe Connect + KYC. Not crypto-collectable.' }); }
     if (/huntr\.com|stripe connect/i.test(text)) { collectable = false; findings.push({ severity: 'high', code: 'fiat_kyc_gated', detail: 'Stripe Connect / KYC. Not crypto-collectable.' }); }
     try {
@@ -100,16 +104,16 @@ app.get('/api/bounty-scan', async (req, res) => {
     try { const meta = await gh(`/repos/${repo}`); stars = meta.stargazers_count; if (stars < 20) findings.push({ severity: 'low', code: 'low_reputation', detail: `Only ${stars} stars.` }); } catch {}
     const sev = findings.map(f => f.severity);
     const risk = sev.includes('critical') ? 'critical' : sev.includes('high') ? 'high' : sev.includes('medium') ? 'medium' : sev.includes('low') ? 'low' : 'clean';
-    console.log(JSON.stringify({ evt: 'paid', route: 'bounty-scan', repo, amount: PRICE, network: NETWORK }));
+    console.log(JSON.stringify({ evt: 'paid', route: 'bounty-scan', repo, amount: PRICE, network: NET }));
     res.json({ repo, issue: issue ? Number(issue) : null, stars, risk, crypto_collectable: collectable, safe_to_attempt: risk === 'clean' || risk === 'low', findings, note: 'Heuristic scan. crypto_collectable=false means payout needs KYC/bank. Verify independently.' });
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, network: NETWORK, payTo: PAYTO, endpoints: ['/api/strength', '/api/onchain', '/api/bounty-scan'] }));
+app.get('/health', (req, res) => res.json({ ok: true, network: NET, payTo: PAYTO, endpoints: ['/api/strength', '/api/onchain', '/api/bounty-scan'] }));
 
 app.get(['/.well-known/x402', '/x402-manifest'], (req, res) => {
   const b = publicBase(req);
-  res.json({ x402Version: 1, resources: ['onchain', 'strength', 'bounty-scan'].map(n => ({ resource: `${b}/api/${n}`, method: 'GET', network: NETWORK, price: PRICE, payTo: PAYTO })) });
+  res.json({ x402Version: 2, resources: ['onchain', 'strength', 'bounty-scan'].map(n => ({ resource: `${b}/api/${n}`, method: 'GET', network: NET, price: PRICE, payTo: PAYTO })) });
 });
 
 const USD_AMOUNT = Number(PRICE.replace('$', '')).toFixed(6);
@@ -132,4 +136,4 @@ app.get('/openapi.json', (req, res) => {
   });
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`x402 service on :${PORT} payTo=${PAYTO} net=${NETWORK} price=${PRICE} public=${PUBLIC_URL || '(from request host)'}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`x402 v2 service on :${PORT} payTo=${PAYTO} net=${NET} price=${PRICE} public=${PUBLIC_URL || '(from request host)'}`));

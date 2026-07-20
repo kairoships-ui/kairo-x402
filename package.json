@@ -3,13 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Kairo Agent x402 API — crypto-native ($0.01 USDC on Base) utility endpoints for agents.",
+  "description": "Kairo Agent x402 API — crypto-native ($0.02 USDC on Base, x402 v2) utility endpoints for agents.",
   "engines": { "node": ">=20" },
   "scripts": { "start": "node server.mjs" },
   "dependencies": {
     "@coinbase/x402": "^2.1.0",
-    "express": "^5.2.1",
-    "viem": "^2.55.2",
-    "x402-express": "^1.2.0"
+    "@x402/core": "^2.19.0",
+    "@x402/evm": "^2.19.0",
+    "@x402/express": "^2.19.0",
+    "express": "^4.21.2",
+    "viem": "^2.55.2"
   }
 }
