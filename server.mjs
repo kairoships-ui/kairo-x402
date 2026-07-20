@@ -3,7 +3,7 @@
 //   WALLET_ADDRESS         payTo address (required)
 //   CDP_API_KEY_ID/SECRET  Coinbase CDP facilitator creds -> mainnet Base settlement (optional; without => base-sepolia testnet)
 //   GITHUB_TOKEN           token with public read (for /api/bounty-scan; optional but recommended for rate limits)
-//   X402_PRICE             price per call, default "$0.01"
+//   X402_PRICE             price per call, default "$0.02"
 //   PUBLIC_URL             public https origin (Render auto-sets RENDER_EXTERNAL_URL)
 //   PORT                   provided by host
 import express from 'express';
@@ -14,7 +14,7 @@ import { base } from 'viem/chains';
 const PAYTO = process.env.WALLET_ADDRESS;
 if (!PAYTO) { console.error('FATAL: WALLET_ADDRESS env is required'); process.exit(1); }
 const PORT = process.env.PORT || 4318;
-const PRICE = process.env.X402_PRICE || '$0.01';
+const PRICE = process.env.X402_PRICE || '$0.02';
 const PUBLIC_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
 
 let NETWORK, facilitator;
@@ -120,7 +120,7 @@ app.get('/openapi.json', (req, res) => {
   const b = publicBase(req);
   res.json({
     openapi: '3.1.0',
-    info: { title: 'Kairo Agent x402 API', version: '1.0.0', description: 'Crypto-native ($0.01 USDC on Base, x402) utility endpoints for agents. No accounts, no KYC — pay-per-call.', 'x-guidance': 'Three paid GET endpoints, $0.01 USDC on Base via x402. GET /api/bounty-scan?repo=owner/name[&issue=N] scores a GitHub bounty for scam risk. GET /api/onchain?address=0x... returns Base account intel. GET /api/strength?pw=... returns password entropy. Pay the 402 challenge to receive JSON.', contact: { email: 'kairo.ships@gmail.com' } },
+    info: { title: 'Kairo Agent x402 API', version: '1.0.0', description: 'Crypto-native ($0.02 USDC on Base, x402) utility endpoints for agents. No accounts, no KYC — pay-per-call.', 'x-guidance': 'Three paid GET endpoints, $0.02 USDC on Base via x402. GET /api/bounty-scan?repo=owner/name[&issue=N] scores a GitHub bounty for scam risk. GET /api/onchain?address=0x... returns Base account intel. GET /api/strength?pw=... returns password entropy. Pay the 402 challenge to receive JSON.', contact: { email: 'kairo.ships@gmail.com' } },
     servers: [{ url: b }],
     paths: {
       '/api/bounty-scan': { get: paidOp({ operationId: 'bountyScan', summary: 'Bounty safety scan', tag: 'Security', params: [{ name: 'repo', in: 'query', required: true, schema: { type: 'string' }, description: 'owner/name' }, { name: 'issue', in: 'query', required: false, schema: { type: 'integer' } }], outputProps: { repo: { type: 'string' }, issue: { type: ['integer', 'null'] }, stars: { type: ['integer', 'null'] }, risk: { type: 'string', enum: ['clean', 'low', 'medium', 'high', 'critical'] }, crypto_collectable: { type: 'boolean' }, safe_to_attempt: { type: 'boolean' }, findings: { type: 'array', items: { type: 'object' } }, note: { type: 'string' } }, outputRequired: ['repo', 'risk', 'crypto_collectable', 'safe_to_attempt', 'findings'] }) },
